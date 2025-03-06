@@ -1,283 +1,340 @@
 /**
- * CertStream provider for Certificate Transparency logs
+ * CertStream Provider
  * 
- * This provider connects to the CertStream WebSocket service which
- * aggregates certificate data from multiple CT logs.
+ * This module provides a connection to the CertStream WebSocket service,
+ * which streams Certificate Transparency log entries in real-time.
+ * 
+ * @module providers/certstream-provider
  */
-const WebSocket = require('ws');
-const BaseProvider = require('./base-provider');
 
-class CertStreamProvider extends BaseProvider {
+const WebSocket = require('ws');
+const EventEmitter = require('events');
+
+/**
+ * CertStream Provider
+ * 
+ * Provider for the CertStream WebSocket service.
+ * 
+ * @extends EventEmitter
+ */
+class CertstreamProvider extends EventEmitter {
   /**
    * Create a new CertStream provider
-   * @param {Object} options - Provider configuration options
+   * @param {Object} options - Provider options
+   * @param {string} options.url - WebSocket URL
+   * @param {boolean} options.skipHeartbeats - Whether to skip heartbeat messages
+   * @param {number} options.reconnectDelay - Reconnect delay in milliseconds
+   * @param {number} options.maxReconnectAttempts - Maximum reconnect attempts
+   * @param {Object} logger - Logger instance
    */
-  constructor(options = {}) {
-    super(options);
-    this.name = 'certstream';
-    this.config = options; // Store the full config
-    this.logger = options.logger; // Reference to logger
+  constructor(options = {}, logger = console) {
+    super();
     
-    // Set WebSocket URL
-    this.wsUrl = options.certstreamWsUrl || 'wss://certstream.calidog.io/';
+    // Set options with defaults
+    this.options = {
+      url: 'wss://certstream.calidog.io/',
+      skipHeartbeats: true,
+      reconnectDelay: 1000,
+      maxReconnectAttempts: 10,
+      ...options
+    };
     
+    this.logger = logger;
     this.ws = null;
+    this.connected = false;
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = options.maxReconnectAttempts || 10;
-    this.reconnectInterval = options.reconnectInterval || 5000;
-    this.reconnectTimeoutId = null;
+    this.reconnectTimer = null;
+    this.connectTime = null;
+    
+    // Statistics
+    this.stats = {
+      connectCount: 0,
+      disconnectCount: 0,
+      reconnectAttempts: 0,
+      messageCount: 0,
+      certificateCount: 0,
+      heartbeatCount: 0,
+      errorCount: 0,
+      lastConnectTime: null,
+      lastDisconnectTime: null,
+      totalConnectedTime: 0,
+      dataReceived: 0
+    };
   }
-
+  
   /**
-   * Initialize the provider
-   * @returns {Promise<void>}
+   * Start the provider
+   * @returns {Promise<void>} Promise that resolves when connected
    */
-  async initialize() {
-    this.logger.info(`Initializing ${this.name} provider with URL: ${this.wsUrl}`);
-    return Promise.resolve();
-  }
-
-  /**
-   * Connect to the CertStream WebSocket service
-   * @returns {Promise<void>}
-   */
-  async connect() {
+  start() {
     return new Promise((resolve, reject) => {
       try {
-        this.logger.info(`Connecting to CertStream WebSocket at ${this.wsUrl}`);
+        // Check if already connected
+        if (this.connected && this.ws) {
+          this.logger.debug('Already connected to CertStream');
+          return resolve();
+        }
         
-        // Create WebSocket connection
-        this.ws = new WebSocket(this.wsUrl);
+        // Reset reconnect attempts
+        this.reconnectAttempts = 0;
         
-        // Set up event handlers
-        this.ws.on('open', () => {
-          this.logger.info('Connected to CertStream WebSocket');
-          this.isConnected = true;
-          this.reconnectAttempts = 0;
-          resolve();
-        });
-        
-        this.ws.on('message', (data) => {
-          this.handleMessage(data);
-        });
-        
-        this.ws.on('error', (error) => {
-          this.logger.error('CertStream WebSocket error:', error.message);
-          this.emit('error', error);
-        });
-        
-        this.ws.on('close', (code, reason) => {
-          this.logger.warn(`CertStream WebSocket closed: ${code} - ${reason}`);
-          this.isConnected = false;
-          
-          // Attempt to reconnect if we were previously running
-          if (this.isRunning) {
-            this.attemptReconnect();
-          }
-        });
+        // Connect to WebSocket
+        this._connect()
+          .then(() => resolve())
+          .catch(error => reject(error));
       } catch (error) {
-        this.logger.error('Failed to connect to CertStream:', error.message);
-        this.isConnected = false;
+        this.logger.error(`Error starting CertStream provider: ${error.message}`);
         reject(error);
       }
     });
   }
-
+  
   /**
-   * Disconnect from the CertStream WebSocket service
-   * @returns {Promise<void>}
+   * Stop the provider
+   * @returns {Promise<void>} Promise that resolves when disconnected
    */
-  async disconnect() {
+  stop() {
     return new Promise((resolve) => {
-      if (!this.ws) {
-        this.isConnected = false;
-        this.isRunning = false;
-        resolve();
-        return;
-      }
-      
-      // Clear any pending reconnect attempts
-      if (this.reconnectTimeoutId) {
-        clearTimeout(this.reconnectTimeoutId);
-        this.reconnectTimeoutId = null;
-      }
-      
-      // Close the WebSocket connection
-      this.ws.on('close', () => {
-        this.logger.info('Disconnected from CertStream WebSocket');
-        this.isConnected = false;
-        this.isRunning = false;
+      try {
+        // Clear reconnect timer
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+        
+        // Check if connected
+        if (!this.connected || !this.ws) {
+          this.logger.debug('Not connected to CertStream');
+          return resolve();
+        }
+        
+        // Close WebSocket
+        this.ws.removeAllListeners();
+        
+        // Update connected time if needed
+        if (this.connectTime) {
+          this.stats.totalConnectedTime += (Date.now() - this.connectTime);
+          this.connectTime = null;
+        }
+        
+        // Close connection
+        this.ws.close();
         this.ws = null;
+        this.connected = false;
+        
+        // Update stats
+        this.stats.disconnectCount++;
+        this.stats.lastDisconnectTime = new Date();
+        
+        this.logger.debug('Disconnected from CertStream');
+        this.emit('disconnected');
+        
         resolve();
-      });
-      
-      this.ws.close();
+      } catch (error) {
+        this.logger.error(`Error stopping CertStream provider: ${error.message}`);
+        this.ws = null;
+        this.connected = false;
+        resolve();
+      }
     });
   }
-
+  
   /**
-   * Attempt to reconnect to the CertStream WebSocket service
+   * Connect to the WebSocket
+   * @private
+   * @returns {Promise<void>} Promise that resolves when connected
+   */
+  _connect() {
+    return new Promise((resolve, reject) => {
+      try {
+        // Create WebSocket
+        this.logger.debug(`Connecting to CertStream at ${this.options.url}`);
+        this.ws = new WebSocket(this.options.url);
+        
+        // Set up event handlers
+        this.ws.on('open', () => {
+          this.logger.debug('Connected to CertStream');
+          this.connected = true;
+          this.reconnectAttempts = 0;
+          this.connectTime = Date.now();
+          
+          // Update stats
+          this.stats.connectCount++;
+          this.stats.lastConnectTime = new Date();
+          
+          this.emit('connected');
+          resolve();
+        });
+        
+        this.ws.on('message', (data) => {
+          try {
+            // Update stats
+            this.stats.messageCount++;
+            this.stats.dataReceived += data.length;
+            
+            // Parse message
+            const message = JSON.parse(data);
+            
+            // Process message
+            if (message.message_type === 'heartbeat') {
+              this.stats.heartbeatCount++;
+              
+              if (!this.options.skipHeartbeats) {
+                this.emit('heartbeat', message);
+              }
+            } else if (message.message_type === 'certificate_update') {
+              this.stats.certificateCount++;
+              this.emit('certificate', message);
+            }
+          } catch (error) {
+            this.logger.error(`Error processing message: ${error.message}`);
+          }
+        });
+        
+        this.ws.on('error', (error) => {
+          this.logger.error(`WebSocket error: ${error.message}`);
+          this.stats.errorCount++;
+          this.emit('error', error);
+          
+          // If not connected yet, reject the promise
+          if (!this.connected) {
+            reject(error);
+          }
+        });
+        
+        this.ws.on('close', () => {
+          // Update connected time if needed
+          if (this.connectTime) {
+            this.stats.totalConnectedTime += (Date.now() - this.connectTime);
+            this.connectTime = null;
+          }
+          
+          // Update state
+          const wasConnected = this.connected;
+          this.connected = false;
+          this.ws = null;
+          
+          // Update stats
+          if (wasConnected) {
+            this.stats.disconnectCount++;
+            this.stats.lastDisconnectTime = new Date();
+            this.logger.debug('Disconnected from CertStream');
+            this.emit('disconnected');
+          }
+          
+          // Attempt to reconnect
+          this._scheduleReconnect();
+        });
+      } catch (error) {
+        this.logger.error(`Error connecting to CertStream: ${error.message}`);
+        reject(error);
+      }
+    });
+  }
+  
+  /**
+   * Schedule a reconnect attempt
    * @private
    */
-  attemptReconnect() {
-    if (this.reconnectTimeoutId) {
-      clearTimeout(this.reconnectTimeoutId);
-    }
-    
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.logger.error(`Max reconnect attempts (${this.maxReconnectAttempts}) reached. Giving up.`);
-      this.emit('error', new Error('Max reconnect attempts reached'));
-      this.isRunning = false;
+  _scheduleReconnect() {
+    // Check if reconnect is allowed
+    if (this.reconnectAttempts >= this.options.maxReconnectAttempts) {
+      this.logger.error(`Maximum reconnect attempts (${this.options.maxReconnectAttempts}) reached`);
       return;
     }
     
+    // Increment reconnect attempts
     this.reconnectAttempts++;
-    const delay = this.reconnectInterval * Math.pow(1.5, this.reconnectAttempts - 1);
+    this.stats.reconnectAttempts++;
     
-    this.logger.info(`Attempting to reconnect to CertStream (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}) in ${delay}ms`);
+    // Calculate delay with exponential backoff
+    const delay = Math.min(
+      this.options.reconnectDelay * Math.pow(1.5, this.reconnectAttempts - 1),
+      30000 // Max 30 seconds
+    );
     
-    this.reconnectTimeoutId = setTimeout(() => {
-      this.connect().catch((error) => {
-        this.logger.error('Reconnect attempt failed:', error.message);
-        // The next reconnect attempt will be scheduled by the 'close' event handler
-      });
+    this.logger.debug(`Scheduling reconnect attempt ${this.reconnectAttempts} in ${delay}ms`);
+    
+    // Schedule reconnect
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      
+      this.logger.debug(`Attempting to reconnect (${this.reconnectAttempts}/${this.options.maxReconnectAttempts})`);
+      
+      // Attempt to reconnect
+      this._connect()
+        .catch(error => {
+          this.logger.error(`Reconnect failed: ${error.message}`);
+        });
     }, delay);
   }
-
+  
   /**
-   * Handle a message from the CertStream WebSocket
-   * @param {string} data - The raw message data
-   * @private
+   * Get provider statistics
+   * @returns {Object} Provider statistics
    */
-  handleMessage(data) {
-    try {
-      // Parse the message
-      const message = JSON.parse(data.toString());
-      
-      // Check the message type
-      switch (message.message_type) {
-        case 'certificate_update':
-          this.handleCertificateUpdate(message);
-          break;
-        
-        case 'heartbeat':
-          this.logger.debug('Received heartbeat from CertStream');
-          break;
-        
-        default:
-          this.logger.debug(`Received unknown message type: ${message.message_type}`);
-      }
-    } catch (error) {
-      this.logger.error('Error processing CertStream message:', error.message);
+  getStats() {
+    // Calculate current connected time
+    let totalConnectedTime = this.stats.totalConnectedTime;
+    
+    if (this.connected && this.connectTime) {
+      totalConnectedTime += (Date.now() - this.connectTime);
     }
+    
+    // Format uptime
+    const uptimeSeconds = Math.floor(totalConnectedTime / 1000);
+    const uptimeMinutes = Math.floor(uptimeSeconds / 60);
+    const uptimeHours = Math.floor(uptimeMinutes / 60);
+    
+    const formattedUptime = uptimeHours > 0
+      ? `${uptimeHours}h ${uptimeMinutes % 60}m ${uptimeSeconds % 60}s`
+      : uptimeMinutes > 0
+        ? `${uptimeMinutes}m ${uptimeSeconds % 60}s`
+        : `${uptimeSeconds}s`;
+    
+    // Return stats
+    return {
+      connected: this.connected,
+      url: this.options.url,
+      connectCount: this.stats.connectCount,
+      disconnectCount: this.stats.disconnectCount,
+      reconnectAttempts: this.stats.reconnectAttempts,
+      messages: {
+        total: this.stats.messageCount,
+        certificates: this.stats.certificateCount,
+        heartbeats: this.stats.heartbeatCount
+      },
+      errorCount: this.stats.errorCount,
+      uptime: {
+        ms: totalConnectedTime,
+        formatted: formattedUptime
+      },
+      dataReceived: {
+        bytes: this.stats.dataReceived,
+        formatted: this._formatBytes(this.stats.dataReceived)
+      },
+      timestamps: {
+        lastConnect: this.stats.lastConnectTime,
+        lastDisconnect: this.stats.lastDisconnectTime
+      }
+    };
   }
-
+  
   /**
-   * Handle a certificate update message
-   * @param {Object} message - The certificate update message
+   * Format bytes to human-readable string
    * @private
+   * @param {number} bytes - Bytes to format
+   * @returns {string} Formatted string
    */
-  handleCertificateUpdate(message) {
-    try {
-      // Extract the relevant certificate data
-      const certData = {
-        timestamp: new Date().toISOString(),
-        certificate: {
-          subject: {
-            common_name: this.extractCommonName(message),
-            organization: this.extractOrganization(message),
-            // Add other subject fields as needed
-          },
-          issuer: {
-            common_name: this.extractIssuerName(message),
-            // Add other issuer fields as needed
-          },
-          validity: {
-            not_before: message.data.leaf_cert.not_before,
-            not_after: message.data.leaf_cert.not_after,
-          },
-          serial_number: message.data.leaf_cert.serial_number || '',
-          fingerprint: {
-            sha256: message.data.leaf_cert.fingerprint,
-          },
-        },
-        ct_logs: [{
-          log_name: message.data.source.name || 'Unknown',
-          log_id: message.data.source.url || '',
-        }],
-        domains: message.data.leaf_cert.all_domains || [],
-      };
-      
-      // Emit the certificate event
-      this.emit('certificate', certData);
-      
-    } catch (error) {
-      this.logger.error('Error processing certificate update:', error.message);
-    }
-  }
-
-  /**
-   * Extract the common name from the certificate data
-   * @param {Object} message - The certificate update message
-   * @returns {string} The common name
-   * @private
-   */
-  extractCommonName(message) {
-    try {
-      // Try to get the first domain from all_domains
-      if (message.data.leaf_cert.all_domains && message.data.leaf_cert.all_domains.length > 0) {
-        return message.data.leaf_cert.all_domains[0];
-      }
-      
-      // If that fails, try to extract it from the subject
-      if (message.data.leaf_cert.subject && message.data.leaf_cert.subject.CN) {
-        return message.data.leaf_cert.subject.CN;
-      }
-      
-      return 'Unknown';
-    } catch (error) {
-      this.logger.debug('Error extracting common name:', error.message);
-      return 'Unknown';
-    }
-  }
-
-  /**
-   * Extract the organization from the certificate data
-   * @param {Object} message - The certificate update message
-   * @returns {string} The organization
-   * @private
-   */
-  extractOrganization(message) {
-    try {
-      if (message.data.leaf_cert.subject && message.data.leaf_cert.subject.O) {
-        return message.data.leaf_cert.subject.O;
-      }
-      
-      return 'Unknown';
-    } catch (error) {
-      this.logger.debug('Error extracting organization:', error.message);
-      return 'Unknown';
-    }
-  }
-
-  /**
-   * Extract the issuer name from the certificate data
-   * @param {Object} message - The certificate update message
-   * @returns {string} The issuer name
-   * @private
-   */
-  extractIssuerName(message) {
-    try {
-      if (message.data.leaf_cert.issuer && message.data.leaf_cert.issuer.CN) {
-        return message.data.leaf_cert.issuer.CN;
-      }
-      
-      return 'Unknown';
-    } catch (error) {
-      this.logger.debug('Error extracting issuer name:', error.message);
-      return 'Unknown';
-    }
+  _formatBytes(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 }
 
-module.exports = CertStreamProvider;
+module.exports = CertstreamProvider;

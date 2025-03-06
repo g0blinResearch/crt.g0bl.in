@@ -45,6 +45,23 @@ function createConfig(cliOptions = {}) {
     // Quiet mode - output only certificate data, no logs
     quiet: process.env.QUIET === 'true' || false,
     
+    // Certificate cache configuration for deduplication
+    certificateCache: {
+      enabled: process.env.CERTIFICATE_CACHE_ENABLED === 'true' || false,
+      cacheTTL: parseInt(process.env.CERTIFICATE_CACHE_TTL || '3600', 10), // 1 hour default
+      cleanupInterval: parseInt(process.env.CERTIFICATE_CACHE_CLEANUP_INTERVAL || '60000', 10), // 1 minute default
+    },
+    
+    // Module system configuration
+    modules: {
+      // Enable module system
+      enabled: process.env.MODULES_ENABLED === 'true' || false,
+      // Directory containing modules
+      modulesDir: process.env.MODULES_DIR || './modules',
+      // Module-specific configurations
+      moduleConfigs: JSON.parse(process.env.MODULE_CONFIGS || '{}'),
+    },
+    
     // Provider-specific configurations
     providers: {
       google: {
@@ -100,6 +117,33 @@ function createConfig(cliOptions = {}) {
   // Handle quiet mode flag
   if (cliOptions.quiet !== undefined) {
     config.quiet = cliOptions.quiet;
+  }
+  
+  // Handle certificate cache configuration
+  if (cliOptions.cache !== undefined) {
+    config.certificateCache.enabled = cliOptions.cache === 'true' || cliOptions.cache === true;
+  }
+  
+  if (cliOptions.cacheTTL) {
+    config.certificateCache.cacheTTL = parseInt(cliOptions.cacheTTL, 10);
+  }
+  
+  if (cliOptions.cacheCleanupInterval) {
+    config.certificateCache.cleanupInterval = parseInt(cliOptions.cacheCleanupInterval, 10);
+  }
+  
+  // Handle module system configuration
+  if (cliOptions.modules !== undefined) {
+    config.modules.enabled = cliOptions.modules === 'true' || cliOptions.modules === true;
+  }
+  
+  if (cliOptions.modulesDir) {
+    config.modules.modulesDir = cliOptions.modulesDir;
+  }
+  
+  if (cliOptions.moduleConfigs) {
+    // Parse JSON string if provided
+    config.modules.moduleConfigs = typeof cliOptions.moduleConfigs === 'string' ? JSON.parse(cliOptions.moduleConfigs) : cliOptions.moduleConfigs;
   }
   
   return config;
