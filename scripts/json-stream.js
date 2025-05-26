@@ -19,7 +19,9 @@ const options = {
   full: args.includes('--full') || args.includes('-f'),
   help: args.includes('--help') || args.includes('-h'),
   filterIssuer: null,
-  filterDomain: null
+  filterDomain: null,
+  minDomains: null,
+  excludeCrl: false
 };
 
 // Process filter arguments
@@ -28,6 +30,14 @@ for (let i = 0; i < args.length; i++) {
     options.filterIssuer = args[i + 1].toLowerCase();
   } else if (args[i] === '--domain' && i + 1 < args.length) {
     options.filterDomain = args[i + 1].toLowerCase();
+  } else if (args[i] === '--min-domains' && i + 1 < args.length) {
+    options.minDomains = parseInt(args[i + 1], 10);
+    if (isNaN(options.minDomains) || options.minDomains < 0) {
+      console.error('Error: --min-domains must be a non-negative number');
+      process.exit(1);
+    }
+  } else if (args[i] === '--exclude-crl') {
+    options.excludeCrl = true;
   }
 }
 
@@ -48,6 +58,8 @@ Options:
   -f, --full           Include full certificate details
   --issuer <pattern>   Only show certificates from issuers matching pattern
   --domain <pattern>   Only show certificates containing domains matching pattern
+  --min-domains <n>    Only show certificates with at least n domains
+  --exclude-crl        Exclude certificates for CRL (Certificate Revocation List) domains
 
 Examples:
   # Basic usage - outputs compact JSON for each certificate
@@ -61,6 +73,12 @@ Examples:
 
   # Filter for certificates containing google.com domains
   node json-stream.js --domain "google.com"
+
+  # Only show certificates with 5 or more domains
+  node json-stream.js --min-domains 5
+
+  # Exclude CRL domains to focus on website certificates
+  node json-stream.js --exclude-crl
 
   # Pipe output to jq for further processing
   node json-stream.js | jq 'select(.domains | length > 10)'
@@ -97,9 +115,14 @@ logger.info("Certificate data will be sent to stdout...");
 
 // Create monitor with minimal cache (to save memory)
 const monitor = new CTStreamMonitor({
+  providerType: 'google-ct',
   provider: {
-    url: 'wss://certstream.calidog.io/',
-    skipHeartbeats: true
+    logs: [
+      'https://ct.googleapis.com/logs/us1/argon2025h1/',
+      'https://ct.googleapis.com/logs/us1/argon2025h2/'
+    ],
+    pollInterval: 5000,
+    batchSize: 50
   },
   cache: {
     enabled: false // Disable cache for this use case
@@ -138,10 +161,35 @@ monitor.on('certificate', (data) => {
     
     // Filter by domain if specified
     if (shouldOutput && options.filterDomain && certificate.domains) {
-      const matchingDomain = certificate.domains.some(domain => 
+      const matchingDomain = certificate.domains.some(domain =>
         domain.toLowerCase().includes(options.filterDomain)
       );
       if (!matchingDomain) {
+        shouldOutput = false;
+      }
+    }
+    
+    // Filter by minimum domain count if specified
+    if (shouldOutput && options.minDomains !== null && certificate.domains) {
+      const domainCount = certificate.domains.length;
+      if (domainCount < options.minDomains) {
+        shouldOutput = false;
+      }
+    }
+    
+    // Filter out CRL domains if specified
+    if (shouldOutput && options.excludeCrl && certificate.domains) {
+      const hasCrlDomain = certificate.domains.some(domain => {
+        const lowerDomain = domain.toLowerCase();
+        return lowerDomain.includes('crl.') ||
+               lowerDomain.includes('.crl') ||
+               lowerDomain.includes('ocsp.') ||
+               lowerDomain.includes('.ocsp') ||
+               lowerDomain.includes('revocation') ||
+               lowerDomain.includes('pki.') ||
+               lowerDomain.includes('.pki');
+      });
+      if (hasCrlDomain) {
         shouldOutput = false;
       }
     }

@@ -139,17 +139,37 @@ class CacheUtils {
   
         // Add SAN domains if available
         if (leafCert.extensions && leafCert.extensions.subjectAltName) {
-          // Split SAN into individual parts
-          const san = leafCert.extensions.subjectAltName;
-          const dnsNames = san.split(',')
-            .map(part => part.trim())
-            .filter(part => part.startsWith('DNS:'))
-            .map(part => part.replace('DNS:', ''));
-        
-  
-          // Add to domains
-          domains.push(...dnsNames);
-       } 
+          try {
+            const san = leafCert.extensions.subjectAltName;
+            let dnsNames = [];
+            
+            if (typeof san === 'string') {
+              // Handle string format (comma-separated)
+              dnsNames = san.split(',')
+                .map(part => part.trim())
+                .filter(part => part.startsWith('DNS:'))
+                .map(part => part.replace('DNS:', ''));
+            } else if (Array.isArray(san)) {
+              // Handle array format
+              dnsNames = san
+                .filter(item => typeof item === 'string' && item.startsWith('DNS:'))
+                .map(item => item.replace('DNS:', ''));
+            } else if (san && typeof san === 'object') {
+              // Handle object format - extract DNS entries
+              if (san.dns && Array.isArray(san.dns)) {
+                dnsNames = san.dns;
+              } else if (san.dNSName && Array.isArray(san.dNSName)) {
+                dnsNames = san.dNSName;
+              }
+            }
+            
+            // Add to domains
+            domains.push(...dnsNames);
+          } catch (error) {
+            // Log the error but don't crash
+            console.error('Error extracting domains:', error.message);
+          }
+       }
       
   
         // Deduplicate and return
