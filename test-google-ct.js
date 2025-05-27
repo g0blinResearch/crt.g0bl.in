@@ -34,13 +34,8 @@ async function testGoogleCT() {
 
         provider.on('certificate', (certificate) => {
             certificateCount++;
-            console.log(`\n📜 Certificate #${certificateCount}:`);
-            console.log(`   Index: ${certificate.data.cert_index}`);
-            console.log(`   Common Name: ${certificate.data.leaf_cert.subject.CN}`);
-            console.log(`   Domains: ${certificate.data.leaf_cert.extensions.subjectAltName.slice(0, 3).join(', ')}${certificate.data.leaf_cert.extensions.subjectAltName.length > 3 ? '...' : ''}`);
-            console.log(`   Issuer: ${certificate.data.leaf_cert.issuer.CN}`);
-            console.log(`   Source: ${certificate.data.source.name} (${certificate.data.source.url})`);
-            console.log(`   Seen: ${new Date(certificate.data.seen * 1000).toISOString()}`);
+            console.log(`\n📜 Certificate #${certificateCount} (Raw JSON):`);
+            console.log(JSON.stringify(certificate, null, 2));
 
             if (certificateCount >= maxCertificates) {
                 console.log(`\n🎯 Reached ${maxCertificates} certificates, stopping test...`);

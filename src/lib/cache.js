@@ -50,10 +50,14 @@ class CacheUtils {
         return null;
       }
       
-      // Handle legacy certificate format
+      // Handle legacy certificate format (Google CT format)
       if (certificate && certificate.data && certificate.data.leaf_cert) {
         const leafCert = certificate.data.leaf_cert;
       
+        // Use cert_index as primary unique identifier for Google CT
+        if (certificate.data.cert_index !== undefined && certificate.data.cert_index !== null) {
+          return `cert:index:${certificate.data.cert_index}`;
+        }
   
         // Use fingerprint if available
         if (leafCert.fingerprint) {
@@ -63,7 +67,7 @@ class CacheUtils {
         // Use serial number and subject
         if (leafCert.serial_number && leafCert.subject && leafCert.subject.CN) {
           return `cert:${leafCert.serial_number}:${leafCert.subject.CN}`;
-       } 
+       }
       
   
         // Use serial number and issuer as fallback
@@ -333,6 +337,7 @@ class CacheUtils {
       
       // Extract basic information
       const info = {
+        id: certificate.data.cert_index || null, // Use cert_index as unique identifier
         serialNumber: leafCert.serial_number || null,
         fingerprint: leafCert.fingerprint || null,
         validFrom: null,
