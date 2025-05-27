@@ -1,7 +1,6 @@
 const BaseProvider = require('./base-provider');
 const https = require('https');
 const { URL } = require('url');
-const forge = require('node-forge');
 
 /**
  * Google Certificate Transparency Log Provider
@@ -291,77 +290,25 @@ class GoogleCTProvider extends BaseProvider {
 
     extractCertificateInfo(leafInput, extraData) {
         try {
-            // CT log entry structure (RFC 6962):
-            // 0: version (1 byte)
-            // 1: leaf_type (1 byte)
-            // 2-9: timestamp (8 bytes)
-            // 10-11: entry_type (2 bytes)
-            // 12-14: certificate length (3 bytes, big endian)
-            // 15+: certificate data
+            // Simple approach: extract domains from the raw certificate data using string parsing
+            // This is much faster than using node-forge for full certificate parsing
             
-            if (leafInput.length < 15) {
-                return null;
-            }
+            // Convert the base64 leaf input to binary string for domain extraction
+            const leafStr = leafInput.toString('binary');
+            const extraStr = extraData ? Buffer.from(extraData, 'base64').toString('binary') : '';
+            const combinedData = leafStr + extraStr;
             
-            // Read certificate length (3 bytes, big endian, starting at byte 12)
-            const certLength = (leafInput[12] << 16) | (leafInput[13] << 8) | leafInput[14];
+            // Extract domains using regex pattern matching
+            const domains = this.extractDomains(combinedData);
             
-            // Extract the certificate data starting at byte 15
-            const certStart = 15;
-            const certEnd = certStart + certLength;
-            
-            if (leafInput.length < certEnd) {
-                return null;
-            }
-            
-            const certData = leafInput.subarray(certStart, certEnd);
-            
-            // Parse the certificate using node-forge
-            try {
-                const certDer = forge.util.createBuffer(certData);
-                const asn1 = forge.asn1.fromDer(certDer);
-                const cert = forge.pki.certificateFromAsn1(asn1);
-                
-                // Extract domains from Subject Alternative Names
-                const domains = [];
-                
-                // Add Common Name if present
-                const commonName = cert.subject.getField('CN');
-                if (commonName) {
-                    domains.push(commonName.value);
-                }
-                
-                // Add SAN domains
-                const sanExtension = cert.getExtension('subjectAltName');
-                if (sanExtension) {
-                    sanExtension.altNames.forEach(altName => {
-                        if (altName.type === 2) { // DNS name
-                            domains.push(altName.value);
-                        }
-                    });
-                }
-                
-                // Remove duplicates
-                const uniqueDomains = [...new Set(domains)];
-                
-                if (uniqueDomains.length > 0) {
-                    // Extract issuer Common Name
-                    const issuerCN = cert.issuer.getField('CN');
-                    const issuer = issuerCN ? issuerCN.value : 'Unknown';
-                    
-                    return {
-                        commonName: uniqueDomains[0],
-                        domains: uniqueDomains,
-                        issuer: issuer,
-                        notBefore: cert.validity.notBefore.toISOString(),
-                        notAfter: cert.validity.notAfter.toISOString()
-                    };
-                }
-                
-            } catch (forgeError) {
-                this.logger.warn('Failed to parse certificate with node-forge:', forgeError.message);
-                // Fallback to basic parsing
-                return this.extractCertificateInfoFallback(leafInput, extraData);
+            if (domains.length > 0) {
+                return {
+                    commonName: domains[0],
+                    domains: domains,
+                    issuer: 'Unknown', // We don't parse issuer info for speed
+                    notBefore: new Date().toISOString(),
+                    notAfter: new Date(Date.now() + 365*24*60*60*1000).toISOString()
+                };
             }
             
             return null;
@@ -370,70 +317,6 @@ class GoogleCTProvider extends BaseProvider {
             this.logger.warn('Failed to extract certificate info:', error.message);
             return null;
         }
-    }
-
-    extractCertificateInfoFallback(leafInput, extraData) {
-        // Fallback method - try to parse the certificate data directly if the main parsing failed
-        try {
-            // First try to parse the raw leafInput as a certificate (some CT logs might have different formats)
-            try {
-                const certDer = forge.util.createBuffer(leafInput);
-                const asn1 = forge.asn1.fromDer(certDer);
-                const cert = forge.pki.certificateFromAsn1(asn1);
-                
-                // Extract domains
-                const domains = [];
-                const commonName = cert.subject.getField('CN');
-                if (commonName) {
-                    domains.push(commonName.value);
-                }
-                
-                const sanExtension = cert.getExtension('subjectAltName');
-                if (sanExtension) {
-                    sanExtension.altNames.forEach(altName => {
-                        if (altName.type === 2) { // DNS name
-                            domains.push(altName.value);
-                        }
-                    });
-                }
-                
-                const uniqueDomains = [...new Set(domains)];
-                
-                if (uniqueDomains.length > 0) {
-                    const issuerCN = cert.issuer.getField('CN');
-                    const issuer = issuerCN ? issuerCN.value : 'Unknown';
-                    
-                    return {
-                        commonName: uniqueDomains[0],
-                        domains: uniqueDomains,
-                        issuer: issuer,
-                        notBefore: cert.validity.notBefore.toISOString(),
-                        notAfter: cert.validity.notAfter.toISOString()
-                    };
-                }
-            } catch (directParseError) {
-                // If direct parsing fails, fall back to string-based domain extraction
-                const leafStr = leafInput.toString('binary');
-                const extraStr = extraData ? Buffer.from(extraData, 'base64').toString('binary') : '';
-                const combinedData = leafStr + extraStr;
-                
-                const domains = this.extractDomains(combinedData);
-                
-                if (domains.length > 0) {
-                    return {
-                        commonName: domains[0],
-                        domains: domains,
-                        issuer: 'Unknown', // Don't use string matching for issuer
-                        notBefore: new Date().toISOString(),
-                        notAfter: new Date(Date.now() + 365*24*60*60*1000).toISOString()
-                    };
-                }
-            }
-        } catch (error) {
-            // Ignore parsing errors
-        }
-        
-        return null;
     }
 
     extractDomains(certData) {

@@ -5,7 +5,6 @@
  */
 
 const https = require('https');
-const forge = require('node-forge');
 
 async function getEntries(logUrl, start, end) {
     return new Promise((resolve, reject) => {
@@ -136,45 +135,86 @@ function debugCertificateStructure(leafInput) {
     }
 }
 
-function testForgeParsingMethods(certData) {
-    console.log('\n🧪 Testing different node-forge parsing methods...');
+function extractDomainsFromCertData(certData) {
+    console.log('\n🔍 Extracting domains using simple string parsing...');
     
-    // Method 1: Direct DER parsing
     try {
-        console.log('Method 1: Direct DER parsing...');
-        const certDer = forge.util.createBuffer(certData);
-        const asn1 = forge.asn1.fromDer(certDer);
-        const cert = forge.pki.certificateFromAsn1(asn1);
-        console.log('✅ Method 1 SUCCESS');
-        console.log('Subject CN:', cert.subject.getField('CN')?.value);
-        console.log('Issuer CN:', cert.issuer.getField('CN')?.value);
-        return cert;
+        // Convert to string and look for domain patterns
+        const certStr = certData.toString('binary');
+        
+        // Look for domain patterns (simplified approach)
+        const domainRegex = /([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}/g;
+        const matches = certStr.match(domainRegex);
+        
+        if (matches) {
+            const domains = [];
+            for (const match of matches) {
+                // Basic validation
+                if (isValidDomain(match)) {
+                    domains.push(match);
+                }
+            }
+            
+            // Remove duplicates and return
+            const uniqueDomains = [...new Set(domains)].sort();
+            console.log('✅ Found domains:', uniqueDomains);
+            return uniqueDomains;
+        }
+        
+        console.log('❌ No domains found');
+        return [];
+        
     } catch (error) {
-        console.log('❌ Method 1 FAILED:', error.message);
+        console.log('❌ Error extracting domains:', error.message);
+        return [];
+    }
+}
+
+function isValidDomain(domain) {
+    // Basic length and format checks
+    if (!domain || domain.length < 4 || domain.length > 253) {
+        return false;
     }
     
-    // Method 2: PEM conversion first
-    try {
-        console.log('Method 2: PEM conversion...');
-        const certPem = forge.pki.certificateToPem(forge.pki.certificateFromDer(forge.util.encode64(certData)));
-        const cert = forge.pki.certificateFromPem(certPem);
-        console.log('✅ Method 2 SUCCESS');
-        return cert;
-    } catch (error) {
-        console.log('❌ Method 2 FAILED:', error.message);
+    // Must contain at least one dot
+    if (!domain.includes('.')) {
+        return false;
     }
     
-    // Method 3: Try as raw binary
-    try {
-        console.log('Method 3: Raw binary...');
-        const cert = forge.pki.certificateFromDer(forge.util.createBuffer(certData, 'raw'));
-        console.log('✅ Method 3 SUCCESS');
-        return cert;
-    } catch (error) {
-        console.log('❌ Method 3 FAILED:', error.message);
+    // Filter out obvious non-domains
+    if (domain.includes('..') ||
+        domain.startsWith('.') ||
+        domain.endsWith('.') ||
+        domain.includes('\\') ||
+        domain.includes(' ')) {
+        return false;
     }
     
-    return null;
+    // Filter out file extensions that are not domains
+    const invalidExtensions = [
+        '.crl', '.cer', '.crt', '.pem', '.der', '.p7b', '.p7c', '.p12', '.pfx',
+        '.key', '.pub', '.bin', '.txt', '.log', '.xml', '.json', '.html', '.htm'
+    ];
+    
+    for (const ext of invalidExtensions) {
+        if (domain.toLowerCase().endsWith(ext)) {
+            return false;
+        }
+    }
+    
+    // Filter out numeric-only subdomains (like "13.crl")
+    const parts = domain.split('.');
+    if (parts.length === 2 && /^\d+$/.test(parts[0])) {
+        return false;
+    }
+    
+    // Must have a valid TLD (at least 2 characters, not all numbers)
+    const tld = parts[parts.length - 1];
+    if (tld.length < 2 || /^\d+$/.test(tld)) {
+        return false;
+    }
+    
+    return true;
 }
 
 async function debugCertificateParsing() {
@@ -199,12 +239,13 @@ async function debugCertificateParsing() {
             const certData = debugCertificateStructure(entry.leaf_input);
             
             if (certData) {
-                const cert = testForgeParsingMethods(certData);
+                const domains = extractDomainsFromCertData(certData);
                 
-                if (cert) {
-                    console.log('\n🎉 Successfully parsed certificate!');
-                    console.log('Subject:', cert.subject.attributes.map(attr => `${attr.shortName}=${attr.value}`).join(', '));
-                    console.log('Issuer:', cert.issuer.attributes.map(attr => `${attr.shortName}=${attr.value}`).join(', '));
+                if (domains.length > 0) {
+                    console.log('\n🎉 Successfully extracted domains using simple parsing!');
+                    console.log('Domains found:', domains);
+                } else {
+                    console.log('\n⚠️ No domains found with simple parsing');
                 }
             }
         }
