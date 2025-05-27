@@ -18,10 +18,15 @@ const logger = {
 
 // Create monitor with options
 const monitor = new CTStreamMonitor({
-  // Provider options
+  // Use the Google CT provider
+  providerType: 'google-ct',
   provider: {
-    url: 'wss://certstream.calidog.io/',
-    skipHeartbeats: true
+    logs: [
+      'https://ct.googleapis.com/logs/us1/argon2025h1/',
+      'https://ct.googleapis.com/logs/us1/argon2025h2/'
+    ],
+    pollInterval: 5000,
+    batchSize: 50
   },
   
   // Cache options (optional)

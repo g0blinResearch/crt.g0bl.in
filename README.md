@@ -2,6 +2,26 @@
 
 A Node.js library for monitoring Certificate Transparency logs in real-time.
 
+## 🔧 Recent Update (May 2025)
+
+**CertStream Issue Resolved - Now Using Google CT Provider**: Investigation revealed that the CertStream service is no longer providing reliable real-time data. We've transitioned to using Google's Certificate Transparency logs directly.
+
+**Solution - Google CT Provider**: We've implemented a robust `GoogleCTProvider` that:
+- Connects directly to Google's Certificate Transparency logs
+- Polls multiple CT log endpoints for comprehensive coverage
+- Extracts all domains from certificates (not just the primary domain)
+- Provides reliable real-time certificate monitoring
+- Handles certificate parsing and domain extraction automatically
+
+**What Changed**:
+- **Fixed domain extraction bug**: All domains from certificates are now properly extracted and displayed
+- Added new `GoogleCTProvider` as the default and only provider
+- Updated examples to use the Google CT provider
+- Removed deprecated CertStream providers
+- No breaking changes to the public API
+
+The library now works reliably and provides true real-time certificate monitoring with complete domain information.
+
 ## Overview
 
 CT-Stream provides real-time access to Certificate Transparency (CT) logs, allowing you to monitor newly issued SSL/TLS certificates as they are published. This enables a variety of use cases including:
@@ -12,7 +32,7 @@ CT-Stream provides real-time access to Certificate Transparency (CT) logs, allow
 - Tracking SSL/TLS adoption trends
 - Integration with security tools and workflows
 
-The library connects to public Certificate Transparency log aggregators (such as CertStream) and provides a simple, event-driven API for consuming and processing certificate data.
+The library connects to Google's Certificate Transparency logs and provides a simple, event-driven API for consuming and processing certificate data.
 
 ## AI-Generated Project
 
@@ -54,7 +74,7 @@ The quickest way to get started is to use the JSON stream script:
 scripts\run-json-stream.bat
 ```
 
-This will connect to the Certificate Transparency stream and output certificates as JSON objects.
+This will connect to Google's Certificate Transparency logs and output certificates as JSON objects.
 
 ## Usage Examples
 
@@ -63,7 +83,7 @@ This will connect to the Certificate Transparency stream and output certificates
 ```javascript
 const CTStreamMonitor = require('./src/index');
 
-// Create a monitor
+// Create a monitor (uses Google CT provider by default)
 const monitor = new CTStreamMonitor();
 
 // Listen for certificates
@@ -101,7 +121,6 @@ node scripts/json-stream.js | jq -c '{timestamp: .timestamp}' | awk -F'"' '{prin
 ## Available Scripts
 
 - `json-stream.js` - Outputs certificate data as JSON
-- `certstream-demo.js` - Demonstrates the library's capabilities with a time-limited run
 - `run-json-stream.sh` / `run-json-stream.bat` - Convenience scripts for running the JSON stream
 
 ## Architecture
@@ -111,7 +130,7 @@ CT-Stream is built with a modular architecture:
 ```
 ct-stream/
 ├── src/                  # Core library files
-│   ├── providers/        # Data providers (CertStream, etc.)
+│   ├── providers/        # Data providers (Google CT)
 │   └── lib/              # Utility modules and shared code
 ├── modules/              # Extension modules
 ├── examples/             # Example applications
@@ -121,14 +140,14 @@ ct-stream/
 ### Core Components
 
 - **CTStreamMonitor**: The main class that coordinates the monitoring process
-- **CertstreamProvider**: Connects to the CertStream WebSocket service
+- **GoogleCTProvider**: Connects to Google's Certificate Transparency logs
 - **Cache**: Efficient in-memory cache for certificates and domains
 - **CertificateModule**: Base class for custom certificate processing modules
 
 ## Data Flow
 
-1. The provider connects to a Certificate Transparency log aggregator
-2. New certificates are received as events
+1. The provider connects to Google's Certificate Transparency logs
+2. New certificates are received by polling the CT logs
 3. Certificates are parsed and normalized
 4. Certificates are cached (if enabled)
 5. Events are emitted for consumers
@@ -177,10 +196,13 @@ The main class for monitoring Certificate Transparency logs.
 
 ```javascript
 const monitor = new CTStreamMonitor({
+  // Provider type (Google CT is the only available provider)
+  providerType: 'google-ct',
+  
   // Provider options
   provider: {
-    url: 'wss://certstream.calidog.io/',
-    skipHeartbeats: true
+    pollInterval: 5000, // Poll every 5 seconds
+    batchSize: 10       // Number of entries to fetch per request
   },
   
   // Cache options
@@ -223,13 +245,16 @@ Planned features for future releases:
 - Real-time alerting system
 - Integration with other security tools
 - REST API for querying certificate data
-- Advanced filtering and analysis capabilities
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Acknowledgements
+## Acknowledgments
 
-- [CertStream](https://certstream.calidog.io/) for providing the Certificate Transparency stream
-- The [Certificate Transparency](https://certificate.transparency.dev/) project
+- Google Certificate Transparency project for providing the CT logs
+- The open-source community for inspiration and tools

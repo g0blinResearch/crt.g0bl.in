@@ -4,7 +4,7 @@
  */
 
 // Import providers
-const CertStreamProvider = require('./certstream-provider');
+const GoogleCTProvider = require('./google-ct-provider');
 
 /**
  * Create a provider instance
@@ -15,22 +15,21 @@ const CertStreamProvider = require('./certstream-provider');
  */
 function createProvider(providerName, config, logger) {
   switch (providerName.toLowerCase()) {
-    case 'certstream':
+    case 'google':
+    case 'google-ct':
       // Inject both config and logger
-      const providerConfig = {
+      const googleProviderConfig = {
         ...config,
         logger: logger
       };
-      return new CertStreamProvider(providerConfig);
+      return new GoogleCTProvider(googleProviderConfig);
 
     // Add additional providers as they're implemented
-    // case 'google':
-    //   return new GoogleProvider(config);
     // case 'cloudflare':
     //   return new CloudflareProvider(config);
 
     default:
-      throw new Error(`Unknown provider: ${providerName}`);
+      throw new Error(`Unknown provider: ${providerName}. Available providers: google, google-ct`);
   }
 }
 

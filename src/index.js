@@ -7,7 +7,7 @@
  */
 
 const EventEmitter = require('events');
-const CertstreamProvider = require('./providers/certstream-provider');
+const { createProvider } = require('./providers/provider-factory');
 const CertificateModule = require('./lib/certificate-module');
 const CacheManager = require('./lib/cache');
 
@@ -32,11 +32,10 @@ class CTStreamMonitor extends EventEmitter {
     
     // Set options with defaults
     this.options = {
+      providerType: 'google-ct', // Default to Google CT provider
       provider: {
-        url: 'wss://certstream.calidog.io/',
-        skipHeartbeats: true,
-        reconnectDelay: 1000,
-        maxReconnectAttempts: 10
+        pollInterval: 5000,
+        batchSize: 10
       },
       cache: {
         enabled: true,
@@ -59,8 +58,8 @@ class CTStreamMonitor extends EventEmitter {
     this.running = false;
     this.initialized = false;
     
-    // Create provider
-    this.provider = new CertstreamProvider(this.options.provider, this.logger);
+    // Create provider using factory
+    this.provider = createProvider(this.options.providerType, this.options.provider, this.logger);
     
     // Create cache
     if (this.options.cache.enabled) {
@@ -465,7 +464,7 @@ class CTStreamMonitor extends EventEmitter {
 module.exports = CTStreamMonitor;
 
 // Export related classes
-module.exports.CertstreamProvider = CertstreamProvider;
 module.exports.CertificateModule = CertificateModule;
 module.exports.Cache = CacheManager;
 module.exports.CacheUtils = CacheManager.CacheUtils;
+module.exports.createProvider = createProvider;
